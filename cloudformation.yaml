@@ -293,7 +293,7 @@ Resources:
       LogGroupName: !Sub /ecs/${EnvironmentName}/${ApplicationName}
       RetentionInDays: 30
 
-  # ===================== Task Definition (משתמש ב-ECR קיים) =====================
+  # ===================== Task Definition =====================
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -316,7 +316,7 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: !Ref ApplicationName
 
-  # ===================== ECS Service (הפתרון הסופי!) =====================
+  # ===================== ECS Service =====================
   ECSService:
     Type: AWS::ECS::Service
     DependsOn: ALBListener
@@ -334,7 +334,6 @@ Resources:
 
 Outputs:
   ALBDnsName:
-    Description: כתובת ה-ALB – שלח לכאן את כל הטראפיק מהאינטרנט
     Value: !GetAtt ApplicationLoadBalancer.DNSName
     Export:
       Name: !Sub ${AWS::StackName}-ALB-DNS

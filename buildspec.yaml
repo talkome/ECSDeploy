@@ -13,21 +13,54 @@ phases:
 
   post_build:
     commands:
-      - echo Pushing the Docker image...
+      - echo "Pushing the Docker image to ECR..."
       - docker push $REPOSITORY_URI:$IMAGE_TAG
-      - echo Push completed
-      - TASK_FAMILY="hello-world-app"
 
-      - echo Writing imagedefinitions.json...
+      - TASK_FAMILY="hello-world-app"
+      - CONTAINER_NAME="hello-world"
+      - CLUSTER_NAME="hello-world-app"
+      - SERVICE_NAME="hello-world-app-service"
+      - EXECUTION_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskExecutionRole"
+      - TASK_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskRole"
+
+      - echo "Writing imagedefinitions.json..."
       - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
 
-      - echo Creating new ECS task definition...
-      - aws ecs register-task-definition --cli-input-json file://taskdef.json --family $TASK_FAMILY
+      - echo "Registering new ECS task definition (revision will auto-increment)..."
+      - aws ecs register-task-definition \
+          --family $TASK_FAMILY \
+          --network-mode awsvpc \
+          --requires-compatibilities FARGATE \
+          --cpu "512" \
+          --memory "1024" \
+          --execution-role-arn $EXECUTION_ROLE_ARN \
+          --task-role-arn $TASK_ROLE_ARN \
+          --container-definitions \
+            "[
+              {
+                \"name\": \"$CONTAINER_NAME\",
+                \"image\": \"$REPOSITORY_URI:$IMAGE_TAG\",
+                \"portMappings\": [{\"containerPort\": 8080, \"protocol\": \"tcp\"}],
+                \"logConfiguration\": {
+                  \"logDriver\": \"awslogs\",
+                  \"options\": {
+                    \"awslogs-group\": \"/ecs/$TASK_FAMILY\",
+                    \"awslogs-region\": \"$AWS_DEFAULT_REGION\",
+                    \"awslogs-stream-prefix\": \"ecs\"
+                  }
+                }
+              }
+            ]"
 
-      - echo Updating ECS service...
-      - aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $TASK_FAMILY --force-new-deployment
+      - echo "Force new deployment on ECS service..."
+      - aws ecs update-service \
+          --cluster $CLUSTER_NAME \
+          --service $SERVICE_NAME \
+          --task-definition $TASK_FAMILY \
+          --force-new-deployment
 
-      - echo Deploy completed successfully with image tag $IMAGE_TAG
+      - echo "Deploy completed successfully!"
+      - echo "New image running: $REPOSITORY_URI:$IMAGE_TAG"
 
 artifacts:
   files:
