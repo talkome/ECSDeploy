@@ -1,356 +1,322 @@
+AWSTemplateFormatVersion: '2010-09-09'
 Description: AWS Resources for VPC, Subnets, IGW, Route Tables, SGs, ALB
 
 Parameters:
-  Application:
+  EnvironmentName:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+
+  ApplicationName:
     Type: String
     Default: my-app
-  IPSuperSet:
+
+  VpcCidr:
     Type: String
-    Default: 10.0
+    Default: 10.0.0.0/16
+
+  PublicSubnetCidrAZ1:
+    Type: String
+    Default: 10.0.1.0/24
+  PublicSubnetCidrAZ2:
+    Type: String
+    Default: 10.0.2.0/24
+
+  PrivateSubnetCidrAZ1:
+    Type: String
+    Default: 10.0.10.0/24
+  PrivateSubnetCidrAZ2:
+    Type: String
+    Default: 10.0.20.0/24
+
+  DesiredTaskCount:
+    Type: Number
+    Default: 2
+    MinValue: 1
 
 Resources:
-  # VPC
+  # ===================== VPC =====================
   VPC:
     Type: AWS::EC2::VPC
     Properties:
-      CidrBlock: !Sub "${IPSuperSet}.0.0/16"
+      CidrBlock: !Ref VpcCidr
       EnableDnsSupport: true
       EnableDnsHostnames: true
       Tags:
         - Key: Name
-          Value: !Ref Application
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-vpc
 
-  # Public Subnets
-  PublicSubnetOne:
+  # ===================== 2 Public Subnets =====================
+  PublicSubnetAZ1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Sub "${IPSuperSet}.1.0/24"
-      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnetCidrAZ1
+      AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub "${Application}-public-one"
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-public-a
+        - Key: kubernetes.io/role/elb
+          Value: "1"
 
-  PublicSubnetTwo:
+  PublicSubnetAZ2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Sub "${IPSuperSet}.2.0/24"
-      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PublicSubnetCidrAZ2
+      AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: true
       Tags:
         - Key: Name
-          Value: !Sub "${Application}-public-two"
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-public-b
+        - Key: kubernetes.io/role/elb
+          Value: "1"
 
-  # Private Subnets
-  PrivateSubnetOne:
+  # ===================== 2 Private Subnets =====================
+  PrivateSubnetAZ1:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Sub "${IPSuperSet}.3.0/24"
-      AvailabilityZone: !Select [0, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnetCidrAZ1
+      AvailabilityZone: !Select [0, !GetAZs '']
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "${Application}-private-one"
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-private-a
 
-  PrivateSubnetTwo:
+  PrivateSubnetAZ2:
     Type: AWS::EC2::Subnet
     Properties:
       VpcId: !Ref VPC
-      CidrBlock: !Sub "${IPSuperSet}.4.0/24"
-      AvailabilityZone: !Select [1, !GetAZs ""]
+      CidrBlock: !Ref PrivateSubnetCidrAZ2
+      AvailabilityZone: !Select [1, !GetAZs '']
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
-          Value: !Sub "${Application}-private-two"
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-private-b
 
-  # Internet Gateway
+  # ===================== Internet Gateway + NATs (For each AZ) =====================
   InternetGateway:
     Type: AWS::EC2::InternetGateway
-    Properties:
-      Tags:
-        - Key: Name
-          Value: !Ref Application
-
-  GatewayAttachment:
+  AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
       VpcId: !Ref VPC
       InternetGatewayId: !Ref InternetGateway
 
-  # NAT Gateways (for private subnets outbound)
-  NatGatewayIpOne:
+  NatEipAZ1:
     Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc
-
-  NatGatewayOne:
+    Properties: { Domain: vpc }
+  NatGatewayAZ1:
     Type: AWS::EC2::NatGateway
     Properties:
-      AllocationId: !GetAtt NatGatewayIpOne.AllocationId
-      SubnetId: !Ref PublicSubnetOne
+      AllocationId: !GetAtt NatEipAZ1.AllocationId
+      SubnetId: !Ref PublicSubnetAZ1
 
-  NatGatewayIpTwo:
+  NatEipAZ2:
     Type: AWS::EC2::EIP
-    Properties:
-      Domain: vpc
-
-  NatGatewayTwo:
+    Properties: { Domain: vpc }
+  NatGatewayAZ2:
     Type: AWS::EC2::NatGateway
     Properties:
-      AllocationId: !GetAtt NatGatewayIpTwo.AllocationId
-      SubnetId: !Ref PublicSubnetTwo
+      AllocationId: !GetAtt NatEipAZ2.AllocationId
+      SubnetId: !Ref PublicSubnetAZ2
 
-  # Route Tables
+  # ===================== Route Tables =====================
   PublicRouteTable:
     Type: AWS::EC2::RouteTable
     Properties:
       VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub "${Application}-public-rt"
-
-  PublicRoute:
+  PublicDefaultRoute:
     Type: AWS::EC2::Route
     Properties:
       RouteTableId: !Ref PublicRouteTable
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
 
-  PublicSubnetOneAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnetOne
-      RouteTableId: !Ref PublicRouteTable
-
-  PublicSubnetTwoAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PublicSubnetTwo
-      RouteTableId: !Ref PublicRouteTable
-
-  PrivateRouteTableOne:
+  PrivateRouteTableAZ1:
     Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub "${Application}-private-rt-one"
-
-  PrivateRouteOne:
+    Properties: { VpcId: !Ref VPC }
+  PrivateRouteAZ1:
     Type: AWS::EC2::Route
     Properties:
-      RouteTableId: !Ref PrivateRouteTableOne
+      RouteTableId: !Ref PrivateRouteTableAZ1
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGatewayOne
+      NatGatewayId: !Ref NatGatewayAZ1
 
-  PrivateSubnetOneAssociation:
-    Type: AWS::EC2::SubnetRouteTableAssociation
-    Properties:
-      SubnetId: !Ref PrivateSubnetOne
-      RouteTableId: !Ref PrivateRouteTableOne
-
-  PrivateRouteTableTwo:
+  PrivateRouteTableAZ2:
     Type: AWS::EC2::RouteTable
-    Properties:
-      VpcId: !Ref VPC
-      Tags:
-        - Key: Name
-          Value: !Sub "${Application}-private-rt-two"
-
-  PrivateRouteTwo:
+    Properties: { VpcId: !Ref VPC }
+  PrivateRouteAZ2:
     Type: AWS::EC2::Route
     Properties:
-      RouteTableId: !Ref PrivateRouteTableTwo
+      RouteTableId: !Ref PrivateRouteTableAZ2
       DestinationCidrBlock: 0.0.0.0/0
-      NatGatewayId: !Ref NatGatewayTwo
+      NatGatewayId: !Ref NatGatewayAZ2
 
-  PrivateSubnetTwoAssociation:
+  # Associations
+  PublicSubnet1Assoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      SubnetId: !Ref PrivateSubnetTwo
-      RouteTableId: !Ref PrivateRouteTableTwo
+      SubnetId: !Ref PublicSubnetAZ1
+      RouteTableId: !Ref PublicRouteTable
+  PublicSubnet2Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnetAZ2
+      RouteTableId: !Ref PublicRouteTable
 
-  # Security Groups
+  PrivateSubnet1Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetAZ1
+      RouteTableId: !Ref PrivateRouteTableAZ1
+  PrivateSubnet2Assoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnetAZ2
+      RouteTableId: !Ref PrivateRouteTableAZ2
+
+  # ===================== ALB =====================
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for ALB
+      GroupDescription: Allow HTTP/HTTPS from Internet
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           CidrIp: 0.0.0.0/0
-        - IpProtocol: tcp
-          FromPort: 443
-          ToPort: 443
-          CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
-          Value: !Sub "${Application}-alb-sg"
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-alb-sg
+
+  ApplicationLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Subnets: [!Ref PublicSubnetAZ1, !Ref PublicSubnetAZ2]
+      SecurityGroups: [!Ref ALBSecurityGroup]
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-alb
+
+  ALBTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      VpcId: !Ref VPC
+      Protocol: HTTP
+      Port: 80
+      TargetType: ip
+      HealthCheckPath: /
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref ALBTargetGroup
+
+  # ===================== ECS Fargate (Private) =====================
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Sub ${EnvironmentName}-${ApplicationName}
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  ECSTaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ecs-tasks.amazonaws.com }
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: Logs
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents]
+                Resource: "*"
+
+  ECSLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /ecs/${EnvironmentName}/${ApplicationName}
+      RetentionInDays: 30
 
   ECSSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Security group for ECS
+      GroupDescription: Allow only from ALB
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
           ToPort: 80
           SourceSecurityGroupId: !Ref ALBSecurityGroup
-      Tags:
-        - Key: Name
-          Value: !Sub "${Application}-ecs-sg"
 
-  # Application Load Balancer
-  ApplicationLoadBalancer:
-    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
-    Properties:
-      Scheme: internet-facing
-      Subnets:
-        - !Ref PublicSubnetOne
-        - !Ref PublicSubnetTwo
-      SecurityGroups:
-        - !Ref ALBSecurityGroup
-      Tags:
-        - Key: Name
-          Value: !Sub "${Application}-alb"
-
-  ALBListener:
-    Type: AWS::ElasticLoadBalancingV2::Listener
-    Properties:
-      DefaultActions:
-        - Type: fixed-response
-          FixedResponseConfig:
-            StatusCode: "503"
-      LoadBalancerArn: !Ref ApplicationLoadBalancer
-      Port: 80
-      Protocol: HTTP
-
-  ECSTaskRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      Policies:
-        - PolicyName: ECSTaskPolicy
-          PolicyDocument:
-            Version: 2012-10-17
-            Statement:
-              - Effect: Allow
-                Action:
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                Resource: "*"
-
-  # ECS Cluster
-  ECSCluster:
-    Type: AWS::ECS::Cluster
-    Properties:
-      ClusterName: !Sub "${Application}-cluster"
-
-  # Target Group for ALB → ECS
-  ALBTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
-    Properties:
-      Name: !Sub "${Application}-tg"
-      VpcId: !Ref VPC
-      Protocol: HTTP
-      Port: 80
-      TargetType: ip
-      HealthCheckPath: /
-      HealthyThresholdCount: 2
-      UnhealthyThresholdCount: 8
-
-  ALBListenerRule:
-    Type: AWS::ElasticLoadBalancingV2::ListenerRule
-    Properties:
-      ListenerArn: !Ref ALBListener
-      Priority: 10
-      Conditions:
-        - Field: path-pattern
-          Values: ["*"]
-      Actions:
-        - Type: forward
-          TargetGroupArn: !Ref ALBTargetGroup
-
-  # Task Definition (Fargate)
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
-      Family: !Sub "${Application}-task"
+      Family: !Sub ${EnvironmentName}-${ApplicationName}
       NetworkMode: awsvpc
-      RequiresCompatibilities:
-        - FARGATE
-      Cpu: "512"          # 0.5 vCPU
+      RequiresCompatibilities: [FARGATE]
+      Cpu: "512"
       Memory: "1024"
       ExecutionRoleArn: !Ref ECSTaskExecutionRole
       TaskRoleArn: !Ref ECSTaskRole
       ContainerDefinitions:
-        - Name: !Sub "${Application}-container"
-          Image: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ECRRepository}:latest"
+        - Name: container
+          Image: !Sub ${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${ApplicationName}:latest
           PortMappings:
             - ContainerPort: 80
-              Protocol: tcp
           LogConfiguration:
             LogDriver: awslogs
             Options:
               awslogs-group: !Ref ECSLogGroup
               awslogs-region: !Ref AWS::Region
-              awslogs-stream-prefix: ecs
+              awslogs-stream-prefix: !Ref ApplicationName
 
-  # CloudWatch Log Group for the containers
-  ECSLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/ecs/${Application}"
-      RetentionInDays: 14
-
-  # ECS Service – 2 containers running in private subnets
   ECSService:
     Type: AWS::ECS::Service
     Properties:
       Cluster: !Ref ECSCluster
-      ServiceName: !Sub "${Application}-service"
+      ServiceName: !Sub ${EnvironmentName}-${ApplicationName}-service
       TaskDefinition: !Ref ECSTaskDefinition
-      DesiredCount: 2
+      DesiredCount: !Ref DesiredTaskCount
       LaunchType: FARGATE
       NetworkConfiguration:
         AwsvpcConfiguration:
-          Subnets:
-            - !Ref PrivateSubnetOne
-            - !Ref PrivateSubnetTwo
-          SecurityGroups:
-            - !Ref ECSSecurityGroup
+          Subnets: [!Ref PrivateSubnetAZ1, !Ref PrivateSubnetAZ2]
+          SecurityGroups: [!Ref ECSSecurityGroup]
           AssignPublicIp: DISABLED
-      LoadBalancer:
+      LoadBalancers:
         - TargetGroupArn: !Ref ALBTargetGroup
-          ContainerName: !Sub "${Application}-container"
+          ContainerName: container
           ContainerPort: 80
 
 Outputs:
-  VPCId:
-    Value: !Ref VPC
-  ALBDNS:
-    Value: !GetAtt ApplicationLoadBalancer.DNSName
-  ECRRepoUri:
-    Value: !GetAtt ECRRepository.RepositoryUri
-  ECSClusterName:
-    Value: !Ref ECSCluster
-  ECSTaskDefinition:
-    Value: !Ref ECSTaskDefinition
-  ECSServiceName:
-    Value: !Ref ECSService
-  ALBDNSName:
-    Description: "DNS ALB"
+  ALBDnsName:
     Value: !GetAtt ApplicationLoadBalancer.DNSName
     Export:
-      Name: !Sub "${AWS::StackName}-ALBDNS"
+      Name: !Sub ${AWS::StackName}-ALB-DNS
