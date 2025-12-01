@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: AWS Resources for VPC, Subnets, IGW, Route Tables, SGs, ALB
+Description: VPC | ALB | Fargate ECS | 2 AZs | ALB | Private ECR
 
 Parameters:
   EnvironmentName:
@@ -46,7 +46,7 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-${ApplicationName}-vpc
 
-  # ===================== 2 Public Subnets =====================
+  # ===================== Subnets (2 AZs) =====================
   PublicSubnetAZ1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -73,7 +73,6 @@ Resources:
         - Key: kubernetes.io/role/elb
           Value: "1"
 
-  # ===================== 2 Private Subnets =====================
   PrivateSubnetAZ1:
     Type: AWS::EC2::Subnet
     Properties:
@@ -96,9 +95,14 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-${ApplicationName}-private-b
 
-  # ===================== Internet Gateway + NATs (For each AZ) =====================
+  # ===================== Internet Gateway + NAT Gateways =====================
   InternetGateway:
     Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-igw
+
   AttachGateway:
     Type: AWS::EC2::VPCGatewayAttachment
     Properties:
@@ -107,7 +111,8 @@ Resources:
 
   NatEipAZ1:
     Type: AWS::EC2::EIP
-    Properties: { Domain: vpc }
+    Properties:
+      Domain: vpc
   NatGatewayAZ1:
     Type: AWS::EC2::NatGateway
     Properties:
@@ -116,7 +121,8 @@ Resources:
 
   NatEipAZ2:
     Type: AWS::EC2::EIP
-    Properties: { Domain: vpc }
+    Properties:
+      Domain: vpc
   NatGatewayAZ2:
     Type: AWS::EC2::NatGateway
     Properties:
@@ -137,7 +143,8 @@ Resources:
 
   PrivateRouteTableAZ1:
     Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref VPC }
+    Properties:
+      VpcId: !Ref VPC
   PrivateRouteAZ1:
     Type: AWS::EC2::Route
     Properties:
@@ -147,7 +154,8 @@ Resources:
 
   PrivateRouteTableAZ2:
     Type: AWS::EC2::RouteTable
-    Properties: { VpcId: !Ref VPC }
+    Properties:
+      VpcId: !Ref VPC
   PrivateRouteAZ2:
     Type: AWS::EC2::Route
     Properties:
@@ -155,7 +163,7 @@ Resources:
       DestinationCidrBlock: 0.0.0.0/0
       NatGatewayId: !Ref NatGatewayAZ2
 
-  # Associations
+  # Route Table Associations
   PublicSubnet1Assoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -166,7 +174,6 @@ Resources:
     Properties:
       SubnetId: !Ref PublicSubnetAZ2
       RouteTableId: !Ref PublicRouteTable
-
   PrivateSubnet1Assoc:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
@@ -178,11 +185,11 @@ Resources:
       SubnetId: !Ref PrivateSubnetAZ2
       RouteTableId: !Ref PrivateRouteTableAZ2
 
-  # ===================== ALB =====================
+  # ===================== Security Groups =====================
   ALBSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupDescription: Allow HTTP/HTTPS from Internet
+      GroupDescription: Allow HTTP from Internet
       VpcId: !Ref VPC
       SecurityGroupIngress:
         - IpProtocol: tcp
@@ -193,6 +200,21 @@ Resources:
         - Key: Name
           Value: !Sub ${EnvironmentName}-${ApplicationName}-alb-sg
 
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Allow traffic only from ALB
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-ecs-sg
+
+  # ===================== ALB + Target Group + Listener + Rule =====================
   ApplicationLoadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
     Properties:
@@ -211,9 +233,13 @@ Resources:
       Port: 80
       TargetType: ip
       HealthCheckPath: /
+      Tags:
+        - Key: Name
+          Value: !Sub ${EnvironmentName}-${ApplicationName}-tg
 
   ALBListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn: ApplicationLoadBalancer
     Properties:
       LoadBalancerArn: !Ref ApplicationLoadBalancer
       Port: 80
@@ -222,12 +248,13 @@ Resources:
         - Type: forward
           TargetGroupArn: !Ref ALBTargetGroup
 
-  # ===================== ECS Fargate (Private) =====================
+  # ===================== ECS Cluster =====================
   ECSCluster:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub ${EnvironmentName}-${ApplicationName}
 
+  # ===================== IAM Roles =====================
   ECSTaskExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -235,7 +262,8 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
+            Principal:
+              Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
@@ -247,7 +275,8 @@ Resources:
         Version: '2012-10-17'
         Statement:
           - Effect: Allow
-            Principal: { Service: ecs-tasks.amazonaws.com }
+            Principal:
+              Service: ecs-tasks.amazonaws.com
             Action: sts:AssumeRole
       Policies:
         - PolicyName: Logs
@@ -264,17 +293,7 @@ Resources:
       LogGroupName: !Sub /ecs/${EnvironmentName}/${ApplicationName}
       RetentionInDays: 30
 
-  ECSSecurityGroup:
-    Type: AWS::EC2::SecurityGroup
-    Properties:
-      GroupDescription: Allow only from ALB
-      VpcId: !Ref VPC
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          SourceSecurityGroupId: !Ref ALBSecurityGroup
-
+  # ===================== Task Definition (משתמש ב-ECR קיים) =====================
   ECSTaskDefinition:
     Type: AWS::ECS::TaskDefinition
     Properties:
@@ -297,8 +316,10 @@ Resources:
               awslogs-region: !Ref AWS::Region
               awslogs-stream-prefix: !Ref ApplicationName
 
+  # ===================== ECS Service (הפתרון הסופי!) =====================
   ECSService:
     Type: AWS::ECS::Service
+    DependsOn: ALBListener
     Properties:
       Cluster: !Ref ECSCluster
       ServiceName: !Sub ${EnvironmentName}-${ApplicationName}-service
@@ -310,13 +331,15 @@ Resources:
           Subnets: [!Ref PrivateSubnetAZ1, !Ref PrivateSubnetAZ2]
           SecurityGroups: [!Ref ECSSecurityGroup]
           AssignPublicIp: DISABLED
-      LoadBalancers:
-        - TargetGroupArn: !Ref ALBTargetGroup
-          ContainerName: container
-          ContainerPort: 80
 
 Outputs:
   ALBDnsName:
+    Description: כתובת ה-ALB – שלח לכאן את כל הטראפיק מהאינטרנט
     Value: !GetAtt ApplicationLoadBalancer.DNSName
     Export:
       Name: !Sub ${AWS::StackName}-ALB-DNS
+
+  VPCId:
+    Value: !Ref VPC
+  PrivateSubnets:
+    Value: !Join [",", [!Ref PrivateSubnetAZ1, !Ref PrivateSubnetAZ2]]
