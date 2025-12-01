@@ -1,4 +1,4 @@
-Description: AWS Resources for VPC, Subnets, IGW, Route Tables, SGs, ALB, ECR
+Description: AWS Resources for VPC, Subnets, IGW, Route Tables, SGs, ALB
 
 Parameters:
   Application:
@@ -230,26 +230,6 @@ Resources:
       LoadBalancerArn: !Ref ApplicationLoadBalancer
       Port: 80
       Protocol: HTTP
-
-  # ECR
-  ECRRepository:
-    Type: AWS::ECR::Repository
-    Properties:
-      RepositoryName: !Sub "${Application}-repo"
-      ImageScanningConfiguration:
-        ScanOnPush: true
-  # IAM Roles for ECS
-  ECSTaskExecutionRole:
-    Type: AWS::IAM::Role
-    Properties:
-      AssumeRolePolicyDocument:
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: ecs-tasks.amazonaws.com
-            Action: sts:AssumeRole
-      ManagedPolicyArns:
-        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
 
   ECSTaskRole:
     Type: AWS::IAM::Role
