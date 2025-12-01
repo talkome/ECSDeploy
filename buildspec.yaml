@@ -16,6 +16,7 @@ phases:
       - echo "Pushing the Docker image to ECR..."
       - docker push $REPOSITORY_URI:$IMAGE_TAG
 
+      # Set Task Variables
       - TASK_FAMILY="hello-world-app"
       - CONTAINER_NAME="hello-world"
       - CLUSTER_NAME="hello-world-app"
@@ -23,11 +24,14 @@ phases:
       - EXECUTION_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskExecutionRole"
       - TASK_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskRole"
 
+      # Write imagedefinitions.json (used later by CodePipeline)
       - echo "Writing imagedefinitions.json..."
       - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
 
+      # Register new ECS task definition
       - echo "Registering new ECS task definition (revision will auto-increment)..."
-      - aws ecs register-task-definition \
+      - |
+        aws ecs register-task-definition \
           --family $TASK_FAMILY \
           --network-mode awsvpc \
           --requires-compatibilities FARGATE \
@@ -35,28 +39,25 @@ phases:
           --memory "1024" \
           --execution-role-arn $EXECUTION_ROLE_ARN \
           --task-role-arn $TASK_ROLE_ARN \
-          --container-definitions "[
+          --container-definitions '[
               {
-                \"name\": \"$CONTAINER_NAME\",
-                \"image\": \"$REPOSITORY_URI:$IMAGE_TAG\",
-                \"portMappings\": [{\"containerPort\": 8080, \"protocol\": \"tcp\"}],
-                \"logConfiguration\": {
-                  \"logDriver\": \"awslogs\",
-                  \"options\": {
-                    \"awslogs-group\": \"/ecs/$TASK_FAMILY\",
-                    \"awslogs-region\": \"$AWS_DEFAULT_REGION\",
-                    \"awslogs-stream-prefix\": \"ecs\"
+                "name": "'"$CONTAINER_NAME"'",
+                "image": "'"$REPOSITORY_URI:$IMAGE_TAG"'",
+                "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
+                "logConfiguration": {
+                  "logDriver": "awslogs",
+                  "options": {
+                    "awslogs-group": "/ecs/'"$TASK_FAMILY"'",
+                    "awslogs-region": "'"$AWS_DEFAULT_REGION"'",
+                    "awslogs-stream-prefix": "ecs"
                   }
                 }
               }
-            ]"
+            ]'
 
+      # Force new deployment on ECS service
       - echo "Force new deployment on ECS service..."
-      - aws ecs update-service \
-          --cluster $CLUSTER_NAME \
-          --service $SERVICE_NAME \
-          --task-definition $TASK_FAMILY \
-          --force-new-deployment
+      - aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $TASK_FAMILY --force-new-deployment
 
       - echo "Deploy completed successfully!"
       - echo "New image running: $REPOSITORY_URI:$IMAGE_TAG"
