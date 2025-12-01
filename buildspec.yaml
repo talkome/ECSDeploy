@@ -35,8 +35,7 @@ phases:
           --memory "1024" \
           --execution-role-arn $EXECUTION_ROLE_ARN \
           --task-role-arn $TASK_ROLE_ARN \
-          --container-definitions \
-            "[
+          --container-definitions "[
               {
                 \"name\": \"$CONTAINER_NAME\",
                 \"image\": \"$REPOSITORY_URI:$IMAGE_TAG\",
