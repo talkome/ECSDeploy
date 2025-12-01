@@ -10,27 +10,26 @@ env:
 phases:
   pre_build:
     commands:
-      - echo "Logging in to Amazon ECR..."
-      # Fetch AWS Account ID dynamically to prevent ARN errors
-      - export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-      - echo "AWS Account ID: $AWS_ACCOUNT_ID"
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - 'echo "Logging in to Amazon ECR..."'
+      - 'export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)'
+      - 'echo "AWS Account ID: $AWS_ACCOUNT_ID"'
+      - 'aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com'
 
   build:
     commands:
-      - echo "Building the Docker image..."
-      - docker build -t $REPOSITORY_URI:$IMAGE_TAG .
+      - 'echo "Building the Docker image..."'
+      - 'docker build -t $REPOSITORY_URI:$IMAGE_TAG .'
 
   post_build:
     commands:
-      - echo "Pushing the Docker image to ECR..."
-      - docker push $REPOSITORY_URI:$IMAGE_TAG
+      - 'echo "Pushing the Docker image to ECR..."'
+      - 'docker push $REPOSITORY_URI:$IMAGE_TAG'
 
-      - export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-      - EXECUTION_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskExecutionRole"
-      - TASK_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskRole"
+      - 'export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)'
+      - 'export EXECUTION_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskExecutionRole"'
+      - 'export TASK_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskRole"'
 
-      - echo "Creating container definition file..."
+      - 'echo "Creating container definition file..."'
       - |
         cat <<EOF > container_defs.json
         [
@@ -50,18 +49,18 @@ phases:
         ]
         EOF
 
-      - echo "Registering new ECS task definition..."
-      - aws ecs register-task-definition --family $TASK_FAMILY --network-mode awsvpc --requires-compatibilities FARGATE --cpu "512" --memory "1024" --execution-role-arn $EXECUTION_ROLE_ARN --task-role-arn $TASK_ROLE_ARN --container-definitions file://container_defs.json
+      - 'echo "Registering new ECS task definition..."'
+      - 'aws ecs register-task-definition --family $TASK_FAMILY --network-mode awsvpc --requires-compatibilities FARGATE --cpu "512" --memory "1024" --execution-role-arn $EXECUTION_ROLE_ARN --task-role-arn $TASK_ROLE_ARN --container-definitions file://container_defs.json'
 
-      # Create imagedefinitions.json (Required for CodePipeline)
-      - echo "Writing imagedefinitions.json..."
-      - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+      # Create imagedefinitions.json
+      - 'echo "Writing imagedefinitions.json..."'
+      - 'printf "[{\"name\":\"%s\",\"imageUri\":\"%s\"}]" $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json'
 
       # Force new deployment
-      - echo "Force new deployment on ECS service..."
-      - aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $TASK_FAMILY --force-new-deployment
+      - 'echo "Force new deployment on ECS service..."'
+      - 'aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $TASK_FAMILY --force-new-deployment'
 
-      - echo "Deploy completed successfully!"
+      - 'echo "Deploy completed successfully!"'
 
 artifacts:
   files:
