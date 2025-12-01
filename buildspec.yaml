@@ -24,7 +24,7 @@ phases:
       - EXECUTION_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskExecutionRole"
       - TASK_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskRole"
 
-      # Write imagedefinitions.json (used later by CodePipeline)
+      # Write imagedefinitions.json
       - echo "Writing imagedefinitions.json..."
       - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
 
@@ -60,9 +60,7 @@ phases:
       # Force new deployment on ECS service
       - echo "Force new deployment on ECS service..."
       - aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $TASK_FAMILY --force-new-deployment
-
       - echo "Deploy completed successfully!"
-      - echo "New image running: $REPOSITORY_URI:$IMAGE_TAG"
 
 artifacts:
   files:
