@@ -16,6 +16,7 @@ phases:
       - echo Pushing the Docker image...
       - docker push $REPOSITORY_URI:$IMAGE_TAG
       - echo Push completed
+      - TASK_FAMILY="hello-world-app"
 
       - echo Writing imagedefinitions.json...
       - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
