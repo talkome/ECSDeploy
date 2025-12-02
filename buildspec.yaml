@@ -3,9 +3,9 @@ version: 0.2
 env:
   variables:
     TASK_FAMILY: "hello-world-app"
-    CONTAINER_NAME: "hello-world"
-    CLUSTER_NAME: "hello-world-app"
-    SERVICE_NAME: "hello-world-app-service"
+    CONTAINER_NAME: "ps-container"
+    CLUSTER_NAME: "ps-cluster"
+    SERVICE_NAME: "ps-server"
 
 phases:
   pre_build:
@@ -24,42 +24,6 @@ phases:
     commands:
       - 'echo "Pushing the Docker image to ECR..."'
       - 'docker push $REPOSITORY_URI:$IMAGE_TAG'
-
-      - 'export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)'
-      - 'export EXECUTION_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskExecutionRole"'
-      - 'export TASK_ROLE_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:role/hello-world-app-ecsTaskRole"'
-
-      - 'echo "Creating container definition file..."'
-      - |
-        cat <<EOF > container_defs.json
-        [
-          {
-            "name": "$CONTAINER_NAME",
-            "image": "$REPOSITORY_URI:$IMAGE_TAG",
-            "portMappings": [{"containerPort": 8080, "protocol": "tcp"}],
-            "logConfiguration": {
-              "logDriver": "awslogs",
-              "options": {
-                "awslogs-group": "/ecs/$TASK_FAMILY",
-                "awslogs-region": "$AWS_DEFAULT_REGION",
-                "awslogs-stream-prefix": "ecs"
-              }
-            }
-          }
-        ]
-        EOF
-
-      - 'echo "Registering new ECS task definition..."'
-      - 'aws ecs register-task-definition --family $TASK_FAMILY --network-mode awsvpc --requires-compatibilities FARGATE --cpu "512" --memory "1024" --execution-role-arn $EXECUTION_ROLE_ARN --task-role-arn $TASK_ROLE_ARN --container-definitions file://container_defs.json'
-
-      # Create imagedefinitions.json
-      - 'echo "Writing imagedefinitions.json..."'
-      - 'printf "[{\"name\":\"%s\",\"imageUri\":\"%s\"}]" $CONTAINER_NAME $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json'
-
-      # Force new deployment
-      - 'echo "Force new deployment on ECS service..."'
-      - 'aws ecs update-service --cluster $CLUSTER_NAME --service $SERVICE_NAME --task-definition $TASK_FAMILY --force-new-deployment'
-
       - 'echo "Deploy completed successfully!"'
 
 artifacts:
