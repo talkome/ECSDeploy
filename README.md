@@ -6,7 +6,7 @@
 - ECS Fargate Service (2 tasks) in private subnets
 - Private encrypted ECR repository
 - VPC Endpoints for ECR & S3 (private access only)
-- Full CI/CD pipeline using CodeCommit → CodeBuild → ECS
+- Full CI/CD pipeline using Github → CodeBuild → ECS
 
 ## CI/CD Pipeline
 1. Push to Github triggers pipeline
