@@ -1,12 +1,5 @@
 version: 0.2
 
-env:
-  variables:
-    TASK_FAMILY: "hello-world-app"
-    CONTAINER_NAME: "ps-container"
-    CLUSTER_NAME: "ps-cluster"
-    SERVICE_NAME: "ps-task-service"
-
 phases:
   pre_build:
     commands:
