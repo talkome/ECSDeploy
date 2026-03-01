@@ -18,7 +18,7 @@ jobs:
   build-and-push:
     runs-on: self-hosted
     env:
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
       ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'ecsdeploy' }}
       CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'hello-container' }}
       USE_OIDC_ROLE: ${{ secrets.AWS_ROLE_TO_ASSUME != '' }}
