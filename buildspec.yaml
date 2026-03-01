@@ -6,6 +6,13 @@ phases:
       - set -euo pipefail
       - echo Logging in to Amazon ECR...
       - |
+        # Persist AWS/ECR env to a file so subsequent commands (which may run
+        # in separate shells, depending on the runner) can reuse credentials.
+        AWS_ENV_FILE="${AWS_ENV_FILE:-/tmp/aws_env.sh}"
+
+        # Help AWS CLI load ~/.aws/config when present
+        export AWS_SDK_LOAD_CONFIG=1
+
         ensure_aws_creds() {
           # If the AWS CLI can already resolve credentials, we're done.
           if aws sts get-caller-identity >/dev/null 2>&1; then
@@ -33,25 +40,44 @@ phases:
             return 1
           fi
 
-          export AWS_ACCESS_KEY_ID="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("AccessKeyId",""))' <<<"$CREDS_JSON")"
-          export AWS_SECRET_ACCESS_KEY="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("SecretAccessKey",""))' <<<"$CREDS_JSON")"
-          export AWS_SESSION_TOKEN="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("Token",""))' <<<"$CREDS_JSON")"
+          if command -v python3 >/dev/null 2>&1; then
+            export AWS_ACCESS_KEY_ID="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("AccessKeyId",""))' <<<"$CREDS_JSON")"
+            export AWS_SECRET_ACCESS_KEY="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("SecretAccessKey",""))' <<<"$CREDS_JSON")"
+            export AWS_SESSION_TOKEN="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("Token",""))' <<<"$CREDS_JSON")"
+          else
+            export AWS_ACCESS_KEY_ID="$(echo "$CREDS_JSON" | sed -n 's/.*"AccessKeyId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            export AWS_SECRET_ACCESS_KEY="$(echo "$CREDS_JSON" | sed -n 's/.*"SecretAccessKey"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            export AWS_SESSION_TOKEN="$(echo "$CREDS_JSON" | sed -n 's/.*"Token"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+          fi
 
           # Verify credentials are usable.
           aws sts get-caller-identity >/dev/null 2>&1
         }
 
         if ! ensure_aws_creds; then
-          echo "ERROR: Unable to locate AWS credentials."
-          echo "- If running on EC2: attach an IAM role to this instance (instance profile) with ECR permissions."
-          echo "- Or export AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN (or configure an AWS profile)."
-          exit 1
+          if [ "${ALLOW_NO_AWS_CREDS:-false}" = "true" ]; then
+            echo "WARNING: Unable to locate AWS credentials; continuing without ECR push/login (ALLOW_NO_AWS_CREDS=true)."
+            export SKIP_ECR_PUSH=1
+          else
+            echo "ERROR: Unable to locate AWS credentials."
+            echo "- If running on EC2: attach an IAM role to this instance (instance profile) with ECR permissions."
+            echo "- Or export AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN (or configure an AWS profile)."
+            exit 1
+          fi
         fi
 
         # Resolve region if not already set.
         AWS_REGION="${AWS_DEFAULT_REGION:-${AWS_REGION:-}}"
         if [ -z "$AWS_REGION" ]; then
-          AWS_REGION="$(curl -fsS -H "X-aws-ec2-metadata-token: $(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)" http://169.254.169.254/latest/dynamic/instance-identity/document 2>/dev/null | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("region",""))' || true)"
+          IID_TOKEN="$(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)"
+          IID_DOC="$(curl -fsS -H "X-aws-ec2-metadata-token: ${IID_TOKEN}" http://169.254.169.254/latest/dynamic/instance-identity/document 2>/dev/null || true)"
+          if [ -n "$IID_DOC" ]; then
+            if command -v python3 >/dev/null 2>&1; then
+              AWS_REGION="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("region",""))' <<<"$IID_DOC")"
+            else
+              AWS_REGION="$(echo "$IID_DOC" | sed -n 's/.*"region"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
+            fi
+          fi
         fi
         if [ -z "$AWS_REGION" ]; then
           echo "ERROR: AWS_DEFAULT_REGION/AWS_REGION is not set and region could not be determined from IMDS."
@@ -61,23 +87,55 @@ phases:
         export AWS_REGION
         export AWS_DEFAULT_REGION="$AWS_REGION"
 
-        ECR_ACCOUNT_ID="${ECR_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
-      - ECR_REPOSITORY_NAME="${ECR_REPOSITORY_NAME:-${ECR_REPOSITORY:-${ECR_REPO_NAME:-${ENVIRONMENT:-dev}-repo}}}"
-      - REPOSITORY_URI="${REPOSITORY_URI:-${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY_NAME}}"
-      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-      - COMMIT_HASH="$(echo "${CODEBUILD_RESOLVED_SOURCE_VERSION:-}" | cut -c 1-7)"
-      - BUILD_NUMBER="${CODEBUILD_BUILD_NUMBER:-0}"
-      - if [ -z "${IMAGE_TAG:-}" ]; then if [ -n "$COMMIT_HASH" ]; then IMAGE_TAG="${COMMIT_HASH}-${BUILD_NUMBER}"; else IMAGE_TAG="build-${BUILD_NUMBER}-$(date -u +%Y%m%d%H%M%S)"; fi; fi
-      - echo "Using REPOSITORY_URI=$REPOSITORY_URI"
-      - echo "Using IMAGE_TAG=$IMAGE_TAG"
+        # Resolve ECR target
+        if [ "${SKIP_ECR_PUSH:-0}" = "1" ]; then
+          export ECR_ACCOUNT_ID="${ECR_ACCOUNT_ID:-000000000000}"
+        else
+          export ECR_ACCOUNT_ID="${ECR_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
+        fi
+        export ECR_REPOSITORY_NAME="${ECR_REPOSITORY_NAME:-${ECR_REPOSITORY:-${ECR_REPO_NAME:-${ENVIRONMENT:-dev}-repo}}}"
+        export REPOSITORY_URI="${REPOSITORY_URI:-${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY_NAME}}"
+
+        # Resolve tag
+        COMMIT_HASH="$(echo "${CODEBUILD_RESOLVED_SOURCE_VERSION:-}" | cut -c 1-7)"
+        BUILD_NUMBER="${CODEBUILD_BUILD_NUMBER:-0}"
+        if [ -z "${IMAGE_TAG:-}" ]; then
+          if [ -n "$COMMIT_HASH" ]; then IMAGE_TAG="${COMMIT_HASH}-${BUILD_NUMBER}"; else IMAGE_TAG="build-${BUILD_NUMBER}-$(date -u +%Y%m%d%H%M%S)"; fi
+        fi
+        export IMAGE_TAG
+
+        # Persist to file for later commands
+        umask 077
+        {
+          echo "export AWS_SDK_LOAD_CONFIG=1"
+          echo "export AWS_REGION=\"$AWS_REGION\""
+          echo "export AWS_DEFAULT_REGION=\"$AWS_REGION\""
+          if [ -n "${AWS_PROFILE:-}" ]; then echo "export AWS_PROFILE=\"$AWS_PROFILE\""; fi
+          if [ -n "${AWS_ACCESS_KEY_ID:-}" ]; then echo "export AWS_ACCESS_KEY_ID=\"$AWS_ACCESS_KEY_ID\""; fi
+          if [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then echo "export AWS_SECRET_ACCESS_KEY=\"$AWS_SECRET_ACCESS_KEY\""; fi
+          if [ -n "${AWS_SESSION_TOKEN:-}" ]; then echo "export AWS_SESSION_TOKEN=\"$AWS_SESSION_TOKEN\""; fi
+          echo "export ECR_ACCOUNT_ID=\"$ECR_ACCOUNT_ID\""
+          echo "export ECR_REPOSITORY_NAME=\"$ECR_REPOSITORY_NAME\""
+          echo "export REPOSITORY_URI=\"$REPOSITORY_URI\""
+          echo "export IMAGE_TAG=\"$IMAGE_TAG\""
+          if [ "${SKIP_ECR_PUSH:-0}" = "1" ]; then echo "export SKIP_ECR_PUSH=1"; fi
+        } >"$AWS_ENV_FILE"
+
+        echo "Using REPOSITORY_URI=$REPOSITORY_URI"
+        echo "Using IMAGE_TAG=$IMAGE_TAG"
+
+      - . "${AWS_ENV_FILE:-/tmp/aws_env.sh}"
+      - if [ "${SKIP_ECR_PUSH:-0}" != "1" ]; then aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"; else echo "Skipping ECR login"; fi
   build:
     commands:
+      - . "${AWS_ENV_FILE:-/tmp/aws_env.sh}"
       - echo Building the Docker image...
       - docker build -t "$REPOSITORY_URI:$IMAGE_TAG" .
   post_build:
     commands:
+      - . "${AWS_ENV_FILE:-/tmp/aws_env.sh}"
       - echo Pushing the Docker image to ECR...
-      - docker push "$REPOSITORY_URI:$IMAGE_TAG"
+      - if [ "${SKIP_ECR_PUSH:-0}" != "1" ]; then docker push "$REPOSITORY_URI:$IMAGE_TAG"; else echo "Skipping ECR push"; fi
       - echo Writing image definitions file...
       - CONTAINER_NAME="${CONTAINER_NAME:-hello-container}"
       - printf '[{"name":"%s","imageUri":"%s"}]' "$CONTAINER_NAME" "$REPOSITORY_URI:$IMAGE_TAG" > imagedefinitions.json
