@@ -5,9 +5,63 @@ phases:
     commands:
       - set -euo pipefail
       - echo Logging in to Amazon ECR...
-      - AWS_REGION="${AWS_DEFAULT_REGION:-${AWS_REGION:-}}"
-      - if [ -z "$AWS_REGION" ]; then echo "ERROR: AWS_DEFAULT_REGION/AWS_REGION is not set"; exit 1; fi
-      - ECR_ACCOUNT_ID="${ECR_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
+      - |
+        ensure_aws_creds() {
+          # If the AWS CLI can already resolve credentials, we're done.
+          if aws sts get-caller-identity >/dev/null 2>&1; then
+            return 0
+          fi
+
+          # Try to source credentials from the EC2 Instance Metadata Service (IMDSv2).
+          # This allows running this buildspec on an EC2 host with an attached IAM role,
+          # even when the environment doesn't automatically expose credentials.
+          IMDS_BASE="http://169.254.169.254/latest"
+
+          # Fetch token (IMDSv2). If it fails, we can't proceed via IMDS.
+          TOKEN="$(curl -fsS -X PUT "${IMDS_BASE}/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || true)"
+          if [ -z "$TOKEN" ]; then
+            return 1
+          fi
+
+          ROLE_NAME="$(curl -fsS -H "X-aws-ec2-metadata-token: ${TOKEN}" "${IMDS_BASE}/meta-data/iam/security-credentials/" 2>/dev/null || true)"
+          if [ -z "$ROLE_NAME" ]; then
+            return 1
+          fi
+
+          CREDS_JSON="$(curl -fsS -H "X-aws-ec2-metadata-token: ${TOKEN}" "${IMDS_BASE}/meta-data/iam/security-credentials/${ROLE_NAME}" 2>/dev/null || true)"
+          if [ -z "$CREDS_JSON" ]; then
+            return 1
+          fi
+
+          export AWS_ACCESS_KEY_ID="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("AccessKeyId",""))' <<<"$CREDS_JSON")"
+          export AWS_SECRET_ACCESS_KEY="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("SecretAccessKey",""))' <<<"$CREDS_JSON")"
+          export AWS_SESSION_TOKEN="$(python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("Token",""))' <<<"$CREDS_JSON")"
+
+          # Verify credentials are usable.
+          aws sts get-caller-identity >/dev/null 2>&1
+        }
+
+        if ! ensure_aws_creds; then
+          echo "ERROR: Unable to locate AWS credentials."
+          echo "- If running on EC2: attach an IAM role to this instance (instance profile) with ECR permissions."
+          echo "- Or export AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY/AWS_SESSION_TOKEN (or configure an AWS profile)."
+          exit 1
+        fi
+
+        # Resolve region if not already set.
+        AWS_REGION="${AWS_DEFAULT_REGION:-${AWS_REGION:-}}"
+        if [ -z "$AWS_REGION" ]; then
+          AWS_REGION="$(curl -fsS -H "X-aws-ec2-metadata-token: $(curl -fsS -X PUT http://169.254.169.254/latest/api/token -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' 2>/dev/null || true)" http://169.254.169.254/latest/dynamic/instance-identity/document 2>/dev/null | python3 -c 'import json,sys; print(json.loads(sys.stdin.read()).get("region",""))' || true)"
+        fi
+        if [ -z "$AWS_REGION" ]; then
+          echo "ERROR: AWS_DEFAULT_REGION/AWS_REGION is not set and region could not be determined from IMDS."
+          exit 1
+        fi
+
+        export AWS_REGION
+        export AWS_DEFAULT_REGION="$AWS_REGION"
+
+        ECR_ACCOUNT_ID="${ECR_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
       - ECR_REPOSITORY_NAME="${ECR_REPOSITORY_NAME:-${ECR_REPOSITORY:-${ECR_REPO_NAME:-${ENVIRONMENT:-dev}-repo}}}"
       - REPOSITORY_URI="${REPOSITORY_URI:-${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY_NAME}}"
       - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
