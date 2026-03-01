@@ -3,23 +3,30 @@ version: 0.2
 phases:
   pre_build:
     commands:
+      - set -euo pipefail
       - echo Logging in to Amazon ECR...
-      - export AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-      - COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
-      - IMAGE_TAG=${COMMIT_HASH:=latest}
+      - AWS_REGION="${AWS_DEFAULT_REGION:-${AWS_REGION:-}}"
+      - if [ -z "$AWS_REGION" ]; then echo "ERROR: AWS_DEFAULT_REGION/AWS_REGION is not set"; exit 1; fi
+      - ECR_ACCOUNT_ID="${ECR_ACCOUNT_ID:-$(aws sts get-caller-identity --query Account --output text)}"
+      - ECR_REPOSITORY_NAME="${ECR_REPOSITORY_NAME:-${ECR_REPOSITORY:-${ECR_REPO_NAME:-${ENVIRONMENT:-dev}-repo}}}"
+      - REPOSITORY_URI="${REPOSITORY_URI:-${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY_NAME}}"
+      - aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "${ECR_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+      - COMMIT_HASH="$(echo "${CODEBUILD_RESOLVED_SOURCE_VERSION:-}" | cut -c 1-7)"
+      - BUILD_NUMBER="${CODEBUILD_BUILD_NUMBER:-0}"
+      - if [ -z "${IMAGE_TAG:-}" ]; then if [ -n "$COMMIT_HASH" ]; then IMAGE_TAG="${COMMIT_HASH}-${BUILD_NUMBER}"; else IMAGE_TAG="build-${BUILD_NUMBER}-$(date -u +%Y%m%d%H%M%S)"; fi; fi
+      - echo "Using REPOSITORY_URI=$REPOSITORY_URI"
+      - echo "Using IMAGE_TAG=$IMAGE_TAG"
   build:
     commands:
       - echo Building the Docker image...
-      - docker build -t $REPOSITORY_URI:$IMAGE_TAG .
-      - docker tag $REPOSITORY_URI:$IMAGE_TAG $REPOSITORY_URI:latest
+      - docker build -t "$REPOSITORY_URI:$IMAGE_TAG" .
   post_build:
     commands:
       - echo Pushing the Docker image to ECR...
-      - docker push $REPOSITORY_URI:$IMAGE_TAG
-      - docker push $REPOSITORY_URI:latest
+      - docker push "$REPOSITORY_URI:$IMAGE_TAG"
       - echo Writing image definitions file...
-      - printf '[{"name":"hello-container","imageUri":"%s"}]' $REPOSITORY_URI:$IMAGE_TAG > imagedefinitions.json
+      - CONTAINER_NAME="${CONTAINER_NAME:-hello-container}"
+      - printf '[{"name":"%s","imageUri":"%s"}]' "$CONTAINER_NAME" "$REPOSITORY_URI:$IMAGE_TAG" > imagedefinitions.json
       - echo Deploy completed successfully!
 artifacts:
   files:
