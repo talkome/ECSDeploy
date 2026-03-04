@@ -19,8 +19,15 @@ jobs:
     runs-on: self-hosted
     env:
       AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
-      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY || 'ecsdeploy' }}
+      # Repository name created by Terraform (see itcManage/02-ecr.tf).
+      # Set this as a GitHub Actions variable on the repo/org.
+      ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+      # Optional: when ECR is in a different account than the runner's AWS identity.
+      # If unset, defaults to the caller's AWS account id.
+      ECR_REGISTRY_ACCOUNT_ID: ${{ vars.ECR_REGISTRY_ACCOUNT_ID }}
       CONTAINER_NAME: ${{ vars.CONTAINER_NAME || 'hello-container' }}
+      # Central ECR repositories are configured as IMMUTABLE by default; don't push mutable tags unless you opt in.
+      PUSH_LATEST: ${{ vars.PUSH_LATEST || 'false' }}
       USE_OIDC_ROLE: ${{ secrets.AWS_ROLE_TO_ASSUME != '' }}
       USE_ACCESS_KEYS: ${{ secrets.AWS_ACCESS_KEY_ID != '' && secrets.AWS_SECRET_ACCESS_KEY != '' }}
 
@@ -54,25 +61,44 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -z "${ECR_REPOSITORY:-}" ]]; then
+            echo "ECR_REPOSITORY is not set. Configure GitHub Actions variable ECR_REPOSITORY to match the Terraform ECR repository name." >&2
+            exit 2
+          fi
+
           AWS_ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-          ECR_REGISTRY="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          REGISTRY_ACCOUNT_ID="${ECR_REGISTRY_ACCOUNT_ID:-$AWS_ACCOUNT_ID}"
+
+          ECR_REGISTRY="${REGISTRY_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
           echo "ECR_REGISTRY=${ECR_REGISTRY}" >> "$GITHUB_ENV"
           echo "REPOSITORY_URI=${ECR_REGISTRY}/${ECR_REPOSITORY}" >> "$GITHUB_ENV"
-          aws ecr get-login-password --region "$AWS_REGION" \
-            | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+
+          # If pushing cross-account, request an auth token for that registry.
+          if [[ "${REGISTRY_ACCOUNT_ID}" != "${AWS_ACCOUNT_ID}" ]]; then
+            aws ecr get-login-password --region "$AWS_REGION" --registry-ids "$REGISTRY_ACCOUNT_ID" \
+              | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+          else
+            aws ecr get-login-password --region "$AWS_REGION" \
+              | docker login --username AWS --password-stdin "$ECR_REGISTRY"
+          fi
+
+          aws ecr describe-repositories --region "$AWS_REGION" --registry-id "$REGISTRY_ACCOUNT_ID" --repository-names "$ECR_REPOSITORY" >/dev/null
 
       - name: Build, tag, and push image
         shell: bash
         run: |
           set -euo pipefail
-          IMAGE_TAG="${GITHUB_SHA::7}"
+          # Re-runs against the same commit should still succeed when ECR tag mutability is IMMUTABLE.
+          IMAGE_TAG="${GITHUB_SHA::7}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           echo "IMAGE_TAG=${IMAGE_TAG}" >> "$GITHUB_ENV"
 
           docker build -t "${REPOSITORY_URI}:${IMAGE_TAG}" .
-          docker tag "${REPOSITORY_URI}:${IMAGE_TAG}" "${REPOSITORY_URI}:latest"
-
           docker push "${REPOSITORY_URI}:${IMAGE_TAG}"
-          docker push "${REPOSITORY_URI}:latest"
+
+          if [[ "${PUSH_LATEST}" == "true" ]]; then
+            docker tag "${REPOSITORY_URI}:${IMAGE_TAG}" "${REPOSITORY_URI}:latest"
+            docker push "${REPOSITORY_URI}:latest"
+          fi
 
       - name: Write imagedefinitions.json
         shell: bash
