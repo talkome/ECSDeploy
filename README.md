@@ -4,7 +4,7 @@
 - VPC with 2 Public + 2 Private subnets (2 AZs)
 - Internet-facing ALB in public subnets
 - ECS Fargate Service (2 tasks) in private subnets
-- Private encrypted ECR repository
+- Private encrypted ECR repository.
 - VPC Endpoints for ECR & S3 (private access only)
 - Full CI/CD pipeline using Github → CodeBuild → ECS
 
