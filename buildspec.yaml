@@ -130,7 +130,12 @@ phases:
     commands:
       - . "${AWS_ENV_FILE:-/tmp/aws_env.sh}"
       - echo Building the Docker image...
-      - docker build -t "$REPOSITORY_URI:$IMAGE_TAG" .
+      - DOCKER_CONTEXT="${DOCKER_CONTEXT:-container}"
+      - DOCKERFILE_PATH="${DOCKERFILE_PATH:-${DOCKER_CONTEXT}/Dockerfile}"
+      - if [ ! -f "$DOCKERFILE_PATH" ]; then echo "ERROR: Dockerfile not found at $DOCKERFILE_PATH"; exit 1; fi
+      - docker build -f "$DOCKERFILE_PATH" -t "$REPOSITORY_URI:$IMAGE_TAG" "$DOCKER_CONTEXT"
+      - echo Running Trivy vulnerability scan...
+      - docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:latest image --exit-code 1 --severity HIGH,CRITICAL "$REPOSITORY_URI:$IMAGE_TAG"
   post_build:
     commands:
       - . "${AWS_ENV_FILE:-/tmp/aws_env.sh}"

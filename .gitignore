@@ -1,0 +1,3 @@
+# Local-only AWS/IAM helper files
+ec2-trust.json
+ecr-push-policy.json
